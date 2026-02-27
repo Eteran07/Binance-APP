@@ -1,0 +1,12 @@
+2026/02/03-15:52:40.831 574c Reusing MANIFEST C:\Users\Edgar\Desktop\Binance_Monitor\perfil_hibrido_qr\Default\IndexedDB\https_accounts.binance.com_0.indexeddb.leveldb/MANIFEST-000001
+2026/02/03-15:52:40.831 574c Recovering log #19
+2026/02/03-15:52:40.834 574c Reusing old log C:\Users\Edgar\Desktop\Binance_Monitor\perfil_hibrido_qr\Default\IndexedDB\https_accounts.binance.com_0.indexeddb.leveldb/000019.log 
+2026/02/03-15:52:42.106 4538 Compacting 1@1 + 1@2 files
+2026/02/03-15:52:42.111 4538 Generated table #22@1: 134 keys, 238383 bytes
+2026/02/03-15:52:42.111 4538 Compacted 1@1 + 1@2 files => 238383 bytes
+2026/02/03-15:52:42.113 4538 compacted to: files[ 0 0 1 0 0 0 0 ]
+2026/02/03-15:52:42.114 4538 Delete type=2 #18
+2026/02/03-15:52:42.114 4538 Delete type=2 #20
+2026/02/03-15:52:42.147 574c Level-0 table #24: started
+2026/02/03-15:52:42.173 574c Level-0 table #24: 2626229 bytes OK
+2026/02/03-15:52:42.175 574c Delete type=0 #19
