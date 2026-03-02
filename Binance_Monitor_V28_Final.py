@@ -73,7 +73,11 @@ GRUPOS_ALERTAS_INICIALES = []
 CARPETA_PERFIL = os.path.join(os.environ['USERPROFILE'], 'DatosBotBinance_V16_Master')
 CHROME_PATH = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
 PORT_DEBUG = 9222
-URL_ORDENES = "https://c2c-admin.binance.com/es/order/pending"
+URL_ORDENES = "https://p2p.binance.com/es/fiatOrder"
+URL_ORDENES_ADMIN = "https://c2c-admin.binance.com/es/order/pending"
+
+# Variable para controlar si estamos en modo admin
+MODO_ADMIN = True  # Por defecto ahora usamos el panel de admin
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
@@ -591,30 +595,38 @@ class MonitorApp(ctk.CTk):
                     try:
                         self.driver.switch_to.window(h)
                         cur = self.driver.current_url or ""
-                        if "fiatOrder" in cur or "c2c-admin.binance.com" in cur or "binance" in cur:
+                        if "fiatOrder" in cur or "binance" in cur:
                             encontrado = True
                             break
                     except:
                         continue
-            except: pass
+            except: pass 
             
+            # Determinar a qué URL navegar según el modo
+            if MODO_ADMIN:
+                url_inicial = URL_ORDENES_ADMIN
+                self.log("⚙️ Modo Admin activado - Navegando al panel de admin...")
+            else:
+                url_inicial = URL_ORDENES
+                self.log("⚙️ Navegando a Binance P2P estándar...")
+
             if not encontrado:
-                self.log("⚙️ Abriendo/navegando a Binance en la pestaña activa...")
+                self.log(f"⚙️ Abriendo/navegando a {url_inicial} en la pestaña activa...")
                 try:
-                    # Preferimos navegar la pestaña actual a la URL de órdenes
-                    self.driver.get(URL_ORDENES)
-                    time.sleep(1.5)
+                    # Preferimos navegar la pestaña actual a la URL correspondiente
+                    self.driver.get(url_inicial)
+                    time.sleep(2)
                 except Exception:
                     try:
                         # Si no es posible, abrimos una nueva pestaña y nos movemos a ella
-                        self.driver.execute_script(f"window.open('{URL_ORDENES}', '_blank');")
-                        time.sleep(1.5)
+                        self.driver.execute_script(f"window.open('{url_inicial}', '_blank');")
+                        time.sleep(2)
                         # Cambiamos al último handle (la nueva pestaña)
                         try:
                             self.driver.switch_to.window(self.driver.window_handles[-1])
                         except: pass
                     except Exception as ex:
-                        self.log(f"❌ No se pudo abrir Binance: {ex}")
+                        self.log(f"❌ No se pudo abrir {url_inicial}: {ex}")
 
             self.update_load_status("ONLINE", 1.0)
             self.status_lbl.configure(text="ONLINE ✅", text_color="#2CC985")
@@ -626,7 +638,7 @@ class MonitorApp(ctk.CTk):
             intentos_login = 0
             while not login_completado and intentos_login < 60:  # Máximo 5 minutos
                 current_url = self.driver.current_url.lower()
-                if "login" not in current_url and ("fiatOrder" in current_url or "c2c-admin.binance.com" in current_url or "binance" in current_url):
+                if "login" not in current_url and ("fiatOrder" in current_url or "c2c-admin" in current_url or "binance" in current_url):
                     login_completado = True
                     self.log("✅ Login completado, procediendo...")
                 else:
@@ -635,9 +647,30 @@ class MonitorApp(ctk.CTk):
                     intentos_login += 1
 
             if login_completado:
-                # Marcar órdenes pagadas (a liberar) antes de empezar
-                self.marcar_ordenes_pagadas()
-                self.log("✅ Órdenes pagadas marcadas como procesadas - solo procesaremos órdenes nuevas")
+                if MODO_ADMIN:
+                    # ACCEDER AL PANEL DE ADMIN - NUEVA FUNCIONALIDAD
+                    self.log("🔄 Accediendo al Panel de Admin...")
+                    acceso_exitoso = self.acceder_panel_admin()
+                    
+                    if acceso_exitoso:
+                        self.log("✅ Panel de admin configurado correctamente")
+                        
+                        # DESHABILITADO: No marcar órdenes como procesadas automáticamente
+                        # Solo escanear para verificar funcionamiento
+                        self.log("⚠️ MODO VERIFICACIÓN: Las órdenes NO serán marcadas como procesadas")
+                        
+                        # Quedarse en el panel admin para escanear
+                        self.log("✅ Panel de admin listo para escaneo continuo")
+                    else:
+                        self.log("⚠️ No se pudo acceder al panel admin, intentando método estándar")
+                        # Intentar navegar al panel admin de todas formas
+                        self.driver.get(URL_ORDENES_ADMIN)
+                        time.sleep(5)
+                        self.log("✅ Navegando al panel admin manualmente")
+                else:
+                    # Método estándar: marcar órdenes pagadas
+                    self.marcar_ordenes_pagadas()
+                    self.log("✅ Órdenes pagadas marcadas como procesadas")
             else:
                 self.log("⚠️ Timeout esperando login, iniciando sin marcar órdenes pagadas")
 
@@ -684,77 +717,6 @@ class MonitorApp(ctk.CTk):
         except:
             pass
         return False
-
-    def click_order_element(self, order_id):
-        """Hace clic en el elemento de una orden en la nueva interfaz del admin.
-        La nueva interfaz es una SPA donde las órdenes se muestran en una lista
-        y al hacer clic se abre un panel lateral sin cambiar la URL.
-        """
-        try:
-            self.log(f"🔍 Buscando elemento de orden: {order_id}")
-            
-            # Estrategias para encontrar y hacer clic en la orden
-            estrategias = [
-                # Buscar por ID de orden en el texto
-                f"//div[contains(@class, 'order') and contains(@class, 'item') and contains(translate(@*, '0123456789', '##########'), '{order_id[:5]}')]",
-                # Buscar cualquier elemento que contenga el ID de orden
-                f"//*[contains(text(), '{order_id}')]",
-                # Buscar en tablas
-                f"//table//tr[contains(., '{order_id}')]",
-                # Buscar en filas de la lista
-                f"//div[contains(@class, 'row') and contains(., '{order_id}')]",
-                # Buscar elementos con data-order
-                f"//*[@data-order-id='{order_id}']",
-                # Buscar elementos con cualquier atributo que contenga el order_id
-                f"//*[contains(@*, '{order_id}')]",
-            ]
-            
-            for estrategia in estrategias:
-                try:
-                    elementos = self.driver.find_elements(By.XPATH, estrategia)
-                    for elem in elementos:
-                        try:
-                            if elem.is_displayed() and elem.is_enabled():
-                                # Scroll hacia el elemento
-                                self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                                time.sleep(0.5)
-                                # Intentar clic normal primero
-                                elem.click()
-                                self.log(f"✅ Clic en orden {order_id} exitoso")
-                                time.sleep(2)  # Esperar a que cargue el panel
-                                return True
-                        except Exception as e:
-                            continue
-                except:
-                    continue
-            
-            # Si no se encontró por XPath, intentar buscar por texto del ID en la página
-            try:
-                # Obtener el código corto de la orden (últimos dígitos)
-                short_id = order_id[-6:] if len(order_id) >= 6 else order_id
-                
-                # Buscar elementos que contengan el ID
-                elementos_texto = self.driver.find_elements(By.XPATH, f"//*[contains(text(), '{short_id}')]")
-                for elem in elementos_texto:
-                    try:
-                        if elem.is_displayed():
-                            self.driver.execute_script("arguments[0].scrollIntoView(true);", elem)
-                            time.sleep(0.3)
-                            elem.click()
-                            self.log(f"✅ Clic en orden {order_id} exitoso (por texto)")
-                            time.sleep(2)
-                            return True
-                    except:
-                        continue
-            except:
-                pass
-                
-            self.log(f"⚠️ No se pudo hacer clic en orden {order_id}")
-            return False
-            
-        except Exception as e:
-            self.log(f"❌ Error haciendo clic en orden: {e}")
-            return False
 
     def marcar_ordenes_pagadas(self):
         """Accede a la pestaña 'Pagada' y marca todas las órdenes 'a liberar' como procesadas."""
@@ -847,8 +809,345 @@ class MonitorApp(ctk.CTk):
         except Exception as e:
             self.log(f"❌ Error marcando órdenes pagadas: {e}")
 
+    # ================= SCROLL/PANEO EN PANEL ADMIN =================
+    def scroll_tabla_admin(self, direction="down", pixels=500):
+        """Hace scroll en la tabla del panel admin para ver más órdenes."""
+        try:
+            if direction == "down":
+                self.driver.execute_script(f"window.scrollBy(0, {pixels});")
+                self.log(f"   📜 [ADMIN] Scroll hacia abajo {pixels}px")
+            else:
+                self.driver.execute_script(f"window.scrollBy(0, -{pixels});")
+                self.log(f"   📜 [ADMIN] Scroll hacia arriba {pixels}px")
+            time.sleep(1)
+            return True
+        except Exception as e:
+            self.log(f"   ⚠️ [ADMIN] Error haciendo scroll: {e}")
+            return False
 
+    def escanear_todas_ordenes_admin(self):
+        """Escanea todas las órdenes en el panel admin haciendo scroll completo."""
+        try:
+            self.log("   🔄 [ADMIN] Iniciando escaneo completo de órdenes...")
+            
+            # Scroll al inicio
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(2)
+            
+            todas_las_ordenes = []
+            ordenes_vistas = set()
+            max_scrolls = 20
+            
+            for scroll_num in range(max_scrolls):
+                src = self.driver.page_source
+                ids_encontrados = re.findall(r'"orderNumber":"(\d{18,20})"', src)
+                if not ids_encontrados:
+                    ids_encontrados = re.findall(r'orderNo=(\d{18,20})', src)
+                if not ids_encontrados:
+                    ids_encontrados = re.findall(r'(\d{18,20})', src)
+                
+                ids_validos = [x for x in dict.fromkeys(ids_encontrados) if len(x) >= 18]
+                
+                for oid in ids_validos:
+                    if oid not in ordenes_vistas:
+                        ordenes_vistas.add(oid)
+                        todas_las_ordenes.append(oid)
+                
+                self.log(f"   📜 [ADMIN] Scroll {scroll_num + 1}: {len(ordenes_vistas)} órdenes vistas")
+                
+                # Scroll hacia abajo
+                self.driver.execute_script("window.scrollBy(0, 500);")
+                time.sleep(2)
+                
+                # Verificar si llegamos al final
+                new_scroll = self.driver.execute_script("return window.pageYOffset + window.innerHeight")
+                total_height = self.driver.execute_script("return document.body.scrollHeight")
+                
+                if new_scroll >= total_height:
+                    self.log("   ✅ [ADMIN] Llegamos al final de la página")
+                    break
+            
+            # Regresar al inicio
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(1)
+            
+            nuevas = [x for x in todas_las_ordenes if x not in self.ordenes_procesadas]
+            self.log(f"   ✅ [ADMIN] Escaneo completo: {len(todas_las_ordenes)} órdenes, {len(nuevas)} nuevas")
+            return nuevas
+            
+        except Exception as e:
+            self.log(f"   ❌ [ADMIN] Error escaneando: {e}")
+            return []
 
+    # ================= PANEL ADMIN BINANCE =================
+    def acceder_panel_admin(self):
+        """Accede al panel de admin de Binance y hace clic en el botón de vista de tabla."""
+        try:
+            # Verificar si estamos en login, si sí, saltar
+            current_url = self.driver.current_url.lower()
+            if "login" in current_url:
+                self.log("⚠️ Usuario en login, no se puede acceder al panel de admin")
+                return False
+
+            self.log("🔄 Accediendo al Panel de Admin de Binance...")
+            self.log(f"   📍 URL: {URL_ORDENES_ADMIN}")
+
+            # Navegar al panel de admin
+            self.driver.get(URL_ORDENES_ADMIN)
+            
+            # Esperar más tiempo para que cargue la página completamente
+            self.log("   ⏳ Esperando carga del panel de admin...")
+            time.sleep(8)  # Espera inicial más larga
+            
+            try:
+                WebDriverWait(self.driver, 30).until(
+                    lambda d: d.execute_script("return document.readyState") == "complete"
+                )
+                self.log("   ✅ Página cargada correctamente")
+                # Espera adicional más larga para elementos dinámicos
+                time.sleep(8)  
+            except:
+                self.log("   ⚠️ Timeout esperando carga de página, continuando de todas formas...")
+                time.sleep(5)  # Espera adicional si hay timeout
+
+            # Verificar que estamos en el panel de admin
+            url_actual = self.driver.current_url
+            self.log(f"   📋 URL actual: {url_actual}")
+            
+            if "c2c-admin" in url_actual:
+                self.log("   ✅ Acceso al panel de admin verificado")
+            else:
+                self.log(f"   ⚠️ Advertencia: URL diferente a la esperada")
+
+            # Hacer clic en el botón de vista de tabla
+            self.log("   🔘 Buscando botón de vista de tabla...")
+            self.log("   ⏳ Esperando que carguen los elementos...")
+            
+            # Esperar a que los elementos de la página carguen
+            time.sleep(5)
+            
+            # Intentar hacer clic usando el ID del elemento
+            boton_encontrado = False
+            
+            # Método 1: Buscar por ID
+            try:
+                self.log("   🔍 Intentando buscar por ID...")
+                boton_tabla = self.driver.find_element(By.ID, "c2c-m-pendingOrders_btn_switchView")
+                if boton_tabla and boton_tabla.is_displayed():
+                    self.log("   ✅ Botón encontrado, haciendo clic...")
+                    time.sleep(2)
+                    boton_tabla.click()
+                    self.log("   ✅ Clic en botón de vista de tabla (ID) exitoso")
+                    boton_encontrado = True
+                    time.sleep(3)  # Esperar después del clic
+            except Exception as e:
+                self.log(f"   ℹ️ No se encontró botón por ID, intentando otros métodos...")
+
+            # Método 2: Buscar por XPath si no funcionó el método 1
+            if not boton_encontrado:
+                self.log("   🔍 Intentando buscar por XPath...")
+                try:
+                    xpaths_boton = [
+                        "//img[@id='c2c-m-pendingOrders_btn_switchView']",
+                        "//button[contains(@id, 'switchView')]",
+                        "//img[contains(@src, 'table')]",
+                        "//*[contains(@class, 'switchView')]",
+                        "//*[contains(@title, 'table')] or //*[contains(@title, 'Table')]"
+                    ]
+                    for xp in xpaths_boton:
+                        try:
+                            elems = self.driver.find_elements(By.XPATH, xp)
+                            for e in elems:
+                                if e.is_displayed() and e.is_enabled():
+                                    self.log(f"   ✅ Elemento encontrado, haciendo clic...")
+                                    time.sleep(2)
+                                    e.click()
+                                    self.log(f"   ✅ Clic en botón de vista de tabla (XPath) exitoso")
+                                    boton_encontrado = True
+                                    time.sleep(3)
+                                    break
+                        except:
+                            continue
+                        if boton_encontrado:
+                            break
+                except Exception as e:
+                    self.log(f"   ℹ️ Error buscando botón por XPath")
+
+            if not boton_encontrado:
+                self.log("   ⚠️ No se pudo hacer clic en el botón de vista de tabla")
+                # Tomar screenshot para debug
+                try:
+                    self.driver.save_screenshot("debug_admin_panel.png")
+                    self.log("   📸 Screenshot guardado: debug_admin_panel.png")
+                except:
+                    pass
+                return False
+
+            # Esperar un poco más después de hacer clic
+            self.log("   ⏳ Configurando vista...")
+            time.sleep(3)
+            
+            self.log("✅ Panel de admin configurado correctamente")
+            return True
+
+        except Exception as e:
+            self.log(f"❌ Error accediendo al panel de admin: {e}")
+            return False
+        
+    def extraer_datos_tabla_admin(self):
+        """Extrae los datos de las órdenes directamente desde la vista de tabla del panel admin SIN entrar a cada orden."""
+        ordenes = []
+        try:
+            src = self.driver.page_source
+            ids_encontrados = re.findall(r'"orderNumber":"(\d{18,20})"', src)
+            if not ids_encontrados:
+                ids_encontrados = re.findall(r'orderNo=(\d{18,20})', src)
+            if not ids_encontrados:
+                ids_encontrados = re.findall(r'(\d{18,20})', src)
+            ids_validos = list(dict.fromkeys([x for x in ids_encontrados if len(x) >= 18]))
+            self.log(f"   📋 IDs encontrados en tabla: {len(ids_validos)}")
+            
+            for oid in ids_validos:
+                datos_orden = {'id': oid}
+                ordenes.append(datos_orden)
+            
+            self.log(f"   ✅ Órdenes extraídas: {len(ordenes)}")
+            return ordenes
+        except Exception as e:
+            self.log(f"❌ Error extrayendo datos de tabla admin: {e}")
+            return []
+   
+
+    def procesar_ordenes_admin(self):
+        """Procesa las órdenes del panel de admin."""
+        try:
+            self.log("🔄 Procesando órdenes desde panel admin...")
+            
+            # Esperar más tiempo a que carguen las órdenes
+            self.log("   ⏳ Esperando carga de órdenes...")
+            time.sleep(5)
+            
+            # Extraer IDs de órdenes de la página
+            src = self.driver.page_source
+            
+            # Buscar IDs en varios formatos
+            ids_encontrados = re.findall(r'"orderNumber":"(\d{18,20})"', src)
+            if not ids_encontrados:
+                ids_encontrados = re.findall(r'orderNo=(\d{18,20})', src)
+            if not ids_encontrados:
+                ids_encontrados = re.findall(r'(\d{18,20})', src)
+            
+            # Filtrar solo IDs válidos
+            ids_validos = [x for x in dict.fromkeys(ids_encontrados) if len(x) >= 18]
+            
+            self.log(f"   📋 Órdenes encontradas en admin: {len(ids_validos)}")
+            
+            return ids_validos
+            
+        except Exception as e:
+            self.log(f"❌ Error procesando órdenes admin: {e}")
+            return []
+        
+        
+
+    def marcar_ordenes_pagadas_admin(self):
+        """Accede a la pestaña de órdenes pagadas en el panel de admin y marca todas como procesadas."""
+        try:
+            # Verificar si estamos en login
+            current_url = self.driver.current_url.lower()
+            if "login" in current_url:
+                self.log("⚠️ Usuario en login, saltando marcado de órdenes pagadas admin")
+                return
+
+            self.log("🔄 Accediendo a pestaña 'Pagadas' en panel admin...")
+
+            # Intentar hacer clic en la pestaña de pagadas
+            xpaths_pagada = [
+                "//*[contains(text(), 'Pagada')]",
+                "//*[contains(text(), 'Pagadas')]",
+                "//*[contains(text(), 'Paid')]",
+                "//*[contains(text(), 'Completed')]",
+                "//*[contains(text(), 'Liberar')]"
+            ]
+
+            pagada_encontrada = False
+            for xp in xpaths_pagada:
+                try:
+                    elems = self.driver.find_elements(By.XPATH, xp)
+                    for e in elems:
+                        try:
+                            if e.is_displayed() and e.is_enabled():
+                                self.log(f"   🔘 Haciendo clic en: {xp}")
+                                e.click()
+                                time.sleep(5)  # Esperar a que cargue la pestaña
+                                pagada_encontrada = True
+                                break
+                        except:
+                            continue
+                except:
+                    continue
+                if pagada_encontrada:
+                    break
+
+            if not pagada_encontrada:
+                self.log("⚠️ No se encontró pestaña de pagadas en admin")
+                return
+
+            # Esperar a que carguen las órdenes pagadas
+            self.log("   ⏳ Esperando carga de órdenes pagadas...")
+            time.sleep(5)
+
+            # Extraer IDs de órdenes pagadas
+            src = self.driver.page_source
+            ids_pagadas = re.findall(r'"orderNumber":"(\d{18,20})"', src)
+            if not ids_pagadas:
+                ids_pagadas = re.findall(r'orderNo=(\d{18,20})', src)
+            if not ids_pagadas:
+                ids_pagadas = re.findall(r'(\d{18,20})', src)
+
+            # Filtrar IDs válidos
+            ids_validos = [x for x in dict.fromkeys(ids_pagadas) if len(x) >= 18]
+
+            # Marcar todas como procesadas
+            self.log(f"   📋 Órdenes pagadas encontradas: {len(ids_validos)}")
+            
+            marcadas = 0
+            for oid in ids_validos:
+                if oid not in self.ordenes_procesadas:
+                    self.guardar_orden(str(int(oid)))
+                    marcadas += 1
+
+            self.log(f"✅ Marcadas {marcadas} órdenes pagadas como procesadas")
+
+            # Volver a la pestaña principal (pendientes)
+            try:
+                xpaths_pendientes = [
+                    "//*[contains(text(), 'Pendiente')]",
+                    "//*[contains(text(), 'Pending')]",
+                    "//*[contains(text(), 'procesando')]",
+                    "//*[contains(text(), 'Processing')]"
+                ]
+                for xp in xpaths_pendientes:
+                    try:
+                        elems = self.driver.find_elements(By.XPATH, xp)
+                        for e in elems:
+                            try:
+                                if e.is_displayed():
+                                    e.click()
+                                    time.sleep(3)
+                                    break
+                            except:
+                                continue
+                    except:
+                        continue
+                    break
+            except:
+                pass
+
+        except Exception as e:
+            self.log(f"❌ Error marcando órdenes pagadas admin: {e}")
+
+    # ================= CAMBIO DE MODO =================
     def change_batch_size(self, v):
         try:
             n = int(float(v))
@@ -950,16 +1249,9 @@ class MonitorApp(ctk.CTk):
 
         monto_final = formatear(datos.get('monto', '0'))
 
-        # Format tasa if available
-        tasa_final = ""
-        if datos.get('tasa'):
-            tasa_final = formatear(datos.get('tasa', '0'))
-
-        # AGREGAMOS LOS DOS CEROS AQUI MANUALMENTE
-        msg = f"<b>ORDEN:</b> <code>00{oid}</code>\n"
+       # AGREGAMOS LOS DOS CEROS AQUI MANUALMENTE
+        msg = f"<b>ORDEN:</b> <code>{oid}</code>\n" 
         msg += f"<b>MONTO:</b> <code>{monto_final}</code>\n"
-        if tasa_final:
-            msg += f"<b>TASA:</b> <code>{tasa_final}</code>\n"
         msg += "------------------\n"
         if datos.get('banco'): msg += f"🏦 <code>{datos.get('banco')}</code>\n"
         msg += f"🆔 <code>{ced_clean}</code>\n"
@@ -967,19 +1259,25 @@ class MonitorApp(ctk.CTk):
         if datos.get('cuenta'): msg += f"🔢 <code>{datos.get('cuenta')}</code>\n"
         if datos.get('titular'): msg += f"👤 <code>{datos.get('titular')}</code>"
 
-        grupo = chat_id
         try:
-            requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
-                          data={'chat_id': grupo, 'text': msg, 'parse_mode': 'HTML'})
-            # Find group number for log
-            try:
-                group_num = self.grupos_alertas.index(grupo) + 1
-                self.log(f"📤 Enviado al Grupo {group_num} (batch)")
-            except:
-                self.log("📤 Enviado (batch)")
-
-        except:
-            self.log("❌ Error Telegram (batch)")
+            # Enviamos la petición y guardamos la respuesta
+            respuesta = requests.post(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                                      data={'chat_id': chat_id, 'text': msg, 'parse_mode': 'HTML'}, timeout=10)
+            
+            # 200 significa que Telegram aceptó y entregó el mensaje
+            if respuesta.status_code == 200:
+                try:
+                    group_num = self.grupos_alertas.index(chat_id) + 1
+                    self.log(f"📤 Enviado al Grupo {group_num} exitosamente")
+                except:
+                    self.log("📤 Mensaje entregado a Telegram")
+            else:
+                # Si falla (ej: 400 Bad Request, 403 Forbidden), mostramos el error exacto
+                error_telegram = respuesta.json().get('description', 'Desconocido')
+                self.log(f"❌ Telegram rechazó el mensaje: {error_telegram}")
+                
+        except Exception as e:
+            self.log(f"❌ Error de red conectando con Telegram: {e}")
 
     def bucle_envio_lotes(self):
         # Ciclo que envía órdenes en lote por grupo en estilo round-robin
@@ -1013,10 +1311,10 @@ class MonitorApp(ctk.CTk):
                     if force_send:
                         self.log(f"🚨 PROCESAMIENTO FORZADO: {queue_len} órdenes acumuladas por más de 5 minutos")
                     else:
-                        self.log(f"🚀 Procesando buffer: {queue_len} órdenes en el orden de llegada.")
+                        self.log(f"🚀 Procesando buffer: {queue_len} órdenes en orden inverso (última llegada primero).")
 
-                    # Usar la cola directamente sin revertir
-                    orders_to_send = list(self.pending_queue)
+                    # Revertir la cola para enviar en orden inverso (última llegada primero)
+                    reversed_queue = list(reversed(self.pending_queue))
                     self.pending_queue.clear()  # Limpiar la cola original
 
                     selected_groups_ids = self.selected_groups
@@ -1034,16 +1332,16 @@ class MonitorApp(ctk.CTk):
                         grupo = selected_groups[0]
                         # send all to grupo
 
-                    # Enviar todas las órdenes en el orden de llegada
+                    # Enviar todas las órdenes en la cola revertida
                     sent_count = 0
-                    for idx, (datos, oid) in enumerate(orders_to_send):
+                    for idx, (datos, oid) in enumerate(reversed_queue):
                         try:
                             self.enviar_a_grupo(grupo, datos, oid)
                             self.guardar_orden(oid)
                             sent_count += 1
                             try:
                                 group_num = selected_groups_ids[gi] + 1 if self.distribute else self.grupos_alertas.index(grupo) + 1
-                                self.log(f"({idx+1}/{queue_len}) Enviado al Grupo {group_num}")
+                                self.log(f"({idx+1}/{queue_len}) Enviado al Grupo {group_num} (orden inverso)")
                             except: pass
                         except Exception as e:
                             consecutive_errors += 1
@@ -1055,7 +1353,7 @@ class MonitorApp(ctk.CTk):
 
                     if sent_count > 0:
                         consecutive_errors = 0  # Reset on success
-                        self.log(f"✅ Buffer procesado: {sent_count}/{queue_len} órdenes enviadas.")
+                        self.log(f"✅ Buffer procesado: {sent_count}/{queue_len} órdenes enviadas en orden inverso.")
                     else:
                         self.log(f"❌ No se pudo enviar ninguna orden del buffer ({queue_len} órdenes fallidas)")
 
@@ -1146,7 +1444,7 @@ class MonitorApp(ctk.CTk):
                         time.sleep(1.5)
 
                 # 2. SI ESTAMOS EN LA LISTA (AUTO)
-                elif "fiatOrder" in url or "c2c-admin.binance.com/order" in url:
+                elif "fiatOrder" in url:
                     if self.is_paused:
                         time.sleep(1)
                         continue
@@ -1162,7 +1460,7 @@ class MonitorApp(ctk.CTk):
                         except:
                             pass
 
-                        # Usamos sleep breve aquí para no quemar CPU, la lista no necesita WebDriverWait estricto
+                        # Usamos sleep breve aquí para no gastar CPU, la lista no necesita WebDriverWait estricto
                         time.sleep(1.5)
                         src = self.driver.page_source
 
@@ -1183,25 +1481,13 @@ class MonitorApp(ctk.CTk):
                         except: pass
 
                         if nuevas:
-                            # Procesar órdenes en el orden en que llegan
-                            for target in nuevas:
-                                self.log(f"⚡ Procesando Orden: {target}")
+                            # Procesar órdenes de abajo hacia arriba (más antiguas primero)
+                            # Invertir el orden: las más antiguas (al final de la lista) se procesan primero
+                            for target in reversed(nuevas):
+                                self.log(f"⚡ Procesando Orden Antigua: {target}")
                                 try:
-                                    # NUEVA INTERFAZ ADMIN: Intentar hacer clic en la orden
-                                    if "c2c-admin.binance.com" in url:
-                                        # Intentar hacer clic en el elemento de la orden
-                                        if self.click_order_element(target):
-                                            self.procesar_orden_actual(target)
-                                        else:
-                                            # Si no se puede hacer clic, intentar navegar por URL como fallback
-                                            self.log(f"⚠️ No se pudo hacer clic en orden {target}, intentando URL directa...")
-                                            self.driver.get(f"https://c2c.binance.com/es/fiatOrderDetail?orderNo={target}")
-                                            self.procesar_orden_actual(target)
-                                    else:
-                                        # Interfaz antigua: navegar por URL
-                                        self.driver.get(f"https://c2c.binance.com/es/fiatOrderDetail?orderNo={target}")
-                                        # Procesar de forma síncrona para extraer y agregar al buffer
-                                        self.procesar_orden_actual(target)
+                                    # [ADMIN] NOS MANTENEMOS EN EL PANEL ADMIN - NO NAVEGAMOS A fiatOrderDetail
+                                    pass  # No navegamos, stays in admin panel
                                 except Exception as ex:
                                     self.log(f"❌ Error al procesar orden {target}: {ex}")
                                 finally:
@@ -1220,10 +1506,105 @@ class MonitorApp(ctk.CTk):
                     except Exception as e:
                         print(f"Error Scan: {e}")
 
+                # 2.B. SI ESTAMOS EN EL PANEL DE ADMIN
+                elif "c2c-admin" in url:
+                    if self.is_paused:
+                        time.sleep(1)
+                        continue
+
+                    self.status_lbl.configure(text="ESCANEANDO ADMIN...", text_color="#9B59B6")
+                    stuck_counter = 0
+
+                    try:
+                        # Extraer IDs de órdenes del panel admin
+                        self.log("   ⏳ [ADMIN] Escaneando órdenes visibles...")
+                        time.sleep(3)  # Mayor tiempo de espera para el panel admin
+                        
+                        # LEER SOLO EL TEXTO VISIBLE DE LA PANTALLA (Ignora scripts ocultos)
+                        texto_visible = self.driver.find_element(By.TAG_NAME, "body").text
+                        
+                        # Buscar números estrictos de 19 o 20 dígitos que empiecen por 2 (Patrón de Binance)
+                        ids_encontrados = re.findall(r'\b(2\d{18,19})\b', texto_visible)
+                        
+                        # Eliminar duplicados manteniendo el orden
+                        ids_validos = list(dict.fromkeys(ids_encontrados))
+                        
+                        # FILTRO: Solo entrar si NO está en la memoria
+                        nuevas = [x for x in ids_validos if x not in self.ordenes_procesadas]
+
+                        # Logs de conteo
+                        try:
+                            total_found = len(ids_validos)
+                            total_new = len(nuevas)
+                            queue_len = len(self.pending_queue)
+                            self.log(f"📊 [ADMIN] IDs encontrados: {total_found} | Nuevas: {total_new} | En cola: {queue_len}")
+                        except: pass
+
+                        if nuevas:
+                            # Procesar órdenes del panel admin
+                            for target in reversed(nuevas):
+                                self.log(f"⚡ [ADMIN] Procesando Orden: {target}")
+                                try:
+                                    # 1. HACER CLIC EN LA ORDEN EN LA TABLA PARA ABRIR EL PANEL LATERAL
+                                    try:
+                                        elemento = self.driver.find_element(By.XPATH, f"//*[contains(text(), '{target}')]")
+                                        # Hacemos scroll para asegurarnos de que sea visible
+                                        self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", elemento)
+                                        time.sleep(0.5)
+                                        # Clic mediante JavaScript para evitar que otros elementos bloqueen
+                                        self.driver.execute_script("arguments[0].click();", elemento)
+                                        self.log(f"   🖱️ [ADMIN] Clic exitoso para abrir panel de la orden {target}")
+                                        time.sleep(2.5) # Esperar a que el panel deslice y cargue
+                                    except Exception as clic_err:
+                                        self.log(f"   ⚠️ [ADMIN] No se pudo hacer clic visualmente en {target}: {clic_err}")
+                                        continue # Si no puede hacer clic, salta a la siguiente orden para evitar extraer datos falsos
+
+                                    # 2. EXTRAER LOS DATOS DEL PANEL ABIERTO
+                                    self.log(f"   🔍 [ADMIN] Extrayendo datos de pantalla...")
+                                    datos = self.extraer_datos_pantalla(self.driver)
+                                    
+                                    if datos.get("monto"):
+                                        oid_s = str(int(target))
+                                        self.log(f"   ✅ [ADMIN] Datos extraídos: {datos.get('monto')} | {datos.get('banco')}")
+                                        
+                                        # 1. Obtener los grupos que marcaste en la interfaz
+                                        grupos_destino = self.selected_groups
+                                        if not grupos_destino: 
+                                            grupos_destino = [0] # Respaldo de seguridad
+                                            
+                                        # 2. Enviar la orden a los grupos seleccionados
+                                        enviado_ok = False
+                                        for idx_grupo in grupos_destino:
+                                            if idx_grupo < len(self.grupos_alertas):
+                                                chat_id_real = self.grupos_alertas[idx_grupo]
+                                                self.enviar_a_grupo(chat_id_real, datos, oid_s)
+                                                enviado_ok = True
+                                        
+                                        # 3. Guardarla como procesada para no repetir
+                                        if enviado_ok:
+                                            self.guardar_orden(oid_s)
+                                            self.log(f"   ✅ [ADMIN] Orden {oid_s} guardada en historial")
+                                    else:
+                                        self.log(f"   ⚠️ [ADMIN] Sin datos para {target}")
+                                    # Procesar la orden
+                                except Exception as ex:
+                                    self.log(f"❌ [ADMIN] Error al procesar orden {target}: {ex}")
+                                finally:
+                                    # Regresar al panel admin
+                                    try:
+                                        self.driver.get(URL_ORDENES_ADMIN)
+                                        time.sleep(4)  # Mayor tiempo al regresar
+                                    except:
+                                        pass
+                        else:
+                            # NO refrescar - solo esperar y hacer scroll si es necesario
+                            self.log("   ⏳ [ADMIN] No hay órdenes nuevas, esperando...")
+                            time.sleep(5)  # Esperar sin refresh
+
+                    except Exception as e:
+                        self.log(f"❌ Error en bucle admin: {e}")
+
                 # 3. URL DESCONOCIDA - Forzar retorno a lista
-                elif "binance.com" in url:
-                    # Estamos en Binance pero no en una URL conocida, simplemente continuar escaneando
-                    pass
                 else:
                     self.log(f"⚠️ URL desconocida detectada: {url[:100]}...")
                     try:
@@ -1363,6 +1744,37 @@ class MonitorApp(ctk.CTk):
             try:
                 self.apply_pending_pause_if_requested()
             except: pass
+
+    # ================= EXTRACTOR DATOS PANEL ADMIN =================
+    def extraer_datos_pantalla(self, driver):
+        """Hace un paneo del texto visible y extrae los datos del panel lateral."""
+        datos = {}
+        try:
+            texto = driver.find_element(By.TAG_NAME, "body").text
+
+            # Expresiones regulares ajustadas a la vista de tu nueva interfaz
+            m_monto = re.search(r'Cantidad Total\s*\n\s*([\d.,]+)', texto)
+            if m_monto: datos['monto'] = m_monto.group(1)
+
+            m_tasa = re.search(r'Precio[^\n]*\s*\n\s*([\d.,]+)', texto)
+            if m_tasa: datos['tasa'] = m_tasa.group(1)
+
+            m_nombre = re.search(r'Nombre completo del receptor\s*\n\s*([^\n]+)', texto)
+            if m_nombre: datos['titular'] = m_nombre.group(1).strip()
+
+            m_cedula = re.search(r'Numero de Cédula\s*\n\s*([^\n]+)', texto)
+            if m_cedula: datos['cedula'] = m_cedula.group(1).strip()
+
+            m_celular = re.search(r'Numero de celular\s*\n\s*([^\n]+)', texto)
+            if m_celular: datos['telefono'] = m_celular.group(1).strip()
+
+            m_banco = re.search(r'Nombre del Banco\s*\n\s*([^\n]+)', texto)
+            if m_banco: datos['banco'] = m_banco.group(1).strip()
+
+            return datos
+        except Exception as e:
+            self.log(f"❌ Error en paneo visual: {e}")
+            return {}
 
     # ================= EXTRACTOR FULL (MEJORADO) =================
     def extraer_datos_full(self, driver):
@@ -1706,16 +2118,9 @@ class MonitorApp(ctk.CTk):
                 return clean
 
         monto_final = formatear(datos.get('monto', '0'))
-        
-        # Format tasa if available
-        tasa_final = ""
-        if datos.get('tasa'):
-            tasa_final = formatear(datos.get('tasa', '0'))
 
         msg = f"<b>ORDEN:</b> <code>{oid}</code>\n"
         msg += f"<b>MONTO:</b> <code>{monto_final}</code>\n"
-        if tasa_final:
-            msg += f"<b>TASA:</b> <code>{tasa_final}</code>\n"
         msg += "------------------\n"
         if datos.get('banco'): msg += f"🏦 <code>{datos.get('banco')}</code>\n"
         msg += f"🆔 <code>{ced_clean}</code>\n"
@@ -1744,12 +2149,12 @@ class MonitorApp(ctk.CTk):
                 time.sleep(10)
 
     def enviar_manual(self):
-        # Enviar manualmente todo el buffer en orden de llegada
+        # Enviar manualmente todo el buffer en orden inverso
         if self.pending_queue:
-            self.log(f"🚀 Enviando buffer manualmente: {len(self.pending_queue)} órdenes en orden de llegada.")
+            self.log(f"🚀 Enviando buffer manualmente: {len(self.pending_queue)} órdenes en orden inverso.")
 
-            # Usar la cola directamente sin revertir
-            orders_to_send = list(self.pending_queue)
+            # Revertir la cola para enviar en orden inverso (última llegada primero)
+            reversed_queue = list(reversed(self.pending_queue))
             self.pending_queue.clear()  # Limpiar la cola original
 
             selected_groups_ids = self.selected_groups
@@ -1765,21 +2170,21 @@ class MonitorApp(ctk.CTk):
             else:
                 grupo = selected_groups[0]
 
-            # Enviar todas las órdenes en el orden de llegada
-            for idx, (datos, oid) in enumerate(orders_to_send):
+            # Enviar todas las órdenes en la cola revertida
+            for idx, (datos, oid) in enumerate(reversed_queue):
                 try:
                     self.enviar_a_grupo(grupo, datos, oid)
                     self.guardar_orden(oid)
                     try:
                         group_num = selected_groups_ids[gi] + 1 if self.distribute else self.grupos_alertas.index(grupo) + 1
-                        self.log(f"({idx+1}/{len(orders_to_send)}) Enviado al Grupo {group_num}")
+                        self.log(f"({idx+1}/{len(reversed_queue)}) Enviado al Grupo {group_num} (orden inverso)")
                     except: pass
                 except:
                     try:
                         self.pending_queue.append((datos, oid))  # Reencolar si falla
                     except: pass
 
-            self.log(f"✅ Buffer enviado manualmente: {len(orders_to_send)} órdenes enviadas.")
+            self.log(f"✅ Buffer enviado manualmente: {len(reversed_queue)} órdenes en orden inverso.")
             self.lbl_alert.configure(text="BUFFER ENVIADO", text_color="green")
             self.btn_send.configure(state="disabled")
             self.driver.get(URL_ORDENES)
